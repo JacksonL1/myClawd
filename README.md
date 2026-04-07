@@ -43,6 +43,10 @@ pip install -r requirements.txt
 # SGLang
 SGLANG_BASE_URL=http://localhost:8000/v1
 SGLANG_MODEL=default
+# 需要鉴权时填写（优先）
+SGLANG_API_KEY=
+# 兼容 ModelScope Token（SGLANG_API_KEY 留空时生效）
+MODELSCOPE_API_TOKEN=
 SGLANG_HEADERS={"Content-Type": "application/json"}
 
 # Skills
@@ -133,6 +137,8 @@ python cli.py reset [session_id]
 
 - **SGLANG_BASE_URL**：SGLang API 基础 URL
 - **SGLANG_MODEL**：使用的模型名称
+- **SGLANG_API_KEY**：网关鉴权 Token（优先）
+- **MODELSCOPE_API_TOKEN**：ModelScope Token（兼容字段）
 - **SGLANG_HEADERS**：API 请求头（JSON 格式）
 - **SKILLS_DIR**：技能目录路径
 - **DB_PATH**：SQLite 数据库路径
