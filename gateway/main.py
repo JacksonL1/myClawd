@@ -53,14 +53,18 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # 兼容需要 Bearer Token 的网关（例如 ModelScope OpenAI 兼容接口）
     if api_key != "EMPTY" and "Authorization" not in headers:
         headers["Authorization"] = f"Bearer {api_key}"
+        client = AsyncOpenAI(
+            api_key=api_key,
+            base_url=settings.sglang_base_url,
+        )
     if api_key == "EMPTY":
+        client = AsyncOpenAI(
+            api_key=api_key,
+            base_url=settings.sglang_base_url,
+            default_headers=headers,
+        )
         log.warning("SGLANG_API_KEY / MODELSCOPE_API_TOKEN 未设置，将以无鉴权模式启动。")
-
-    client = AsyncOpenAI(
-        api_key=api_key,
-        base_url=settings.sglang_base_url,
-        default_headers=headers,
-    )
+    log.info(f"headers: {headers}, url: {settings.sglang_base_url}, model: {settings.sglang_model}")
 
     # 模型名：优先用环境变量，否则从 SGLang /v1/models 获取
     # 用 httpx 直接请求避免 OpenAI SDK 的 Method Not Allowed 问题
@@ -84,13 +88,13 @@ app = FastAPI(title="OpenClaw-PY Gateway", lifespan=lifespan)
 # ════════════════════════════════════════════════════════════════
 
 class ChatRequest(BaseModel):
-    message:    str
-    session_id: str = "main"   # 默认发给 main session
+    message: str
+    session_id: str = "main"  # 默认发给 main session
 
 
 class ChatResponse(BaseModel):
     session_id: str
-    status:     str = "queued"
+    status: str = "queued"
 
 
 # ════════════════════════════════════════════════════════════════
@@ -101,7 +105,7 @@ class ChatResponse(BaseModel):
 async def health():
     mgr = get_manager()
     return {
-        "status":   "ok",
+        "status": "ok",
         "sessions": mgr.get_running_sessions(),
     }
 
@@ -115,16 +119,16 @@ async def chat(req: ChatRequest):
 
 
 class SyncChatRequest(BaseModel):
-    message:    str
-    session_id: str   = "main"
-    sender_id:  str   = ""
-    timeout:    float = 300.0
+    message: str
+    session_id: str = "main"
+    sender_id: str = ""
+    timeout: float = 300.0
 
 
 class SyncChatResponse(BaseModel):
     session_id: str
-    reply:      str
-    progress:   list[str] = []   # 中间步骤日志，供前端展示
+    reply: str
+    progress: list[str] = []  # 中间步骤日志，供前端展示
 
 
 @app.post("/chat/sync", response_model=SyncChatResponse)
@@ -156,7 +160,8 @@ async def chat_sync(req: SyncChatRequest):
             except asyncio.TimeoutError:
                 continue
 
-            log.info(f"[chat/sync] got payload: progress={payload.get('progress')} text={str(payload.get('text',''))[:60]}")
+            log.info(
+                f"[chat/sync] got payload: progress={payload.get('progress')} text={str(payload.get('text', ''))[:60]}")
 
             if payload.get("progress"):
                 # 中间步骤，收集后继续等
@@ -177,16 +182,16 @@ async def chat_sync(req: SyncChatRequest):
             if reply:
                 log.info(f"[chat/sync] returning final reply: {reply[:80]}")
                 return SyncChatResponse(
-                    session_id = effective_session,
-                    reply      = reply,
-                    progress   = progress_logs,
+                    session_id=effective_session,
+                    reply=reply,
+                    progress=progress_logs,
                 )
 
         log.warning(f"[chat/sync] timeout for session {effective_session}")
         return SyncChatResponse(
-            session_id = effective_session,
-            reply      = "⏱ 请求超时，Agent 可能正在执行耗时任务，请稍后重试。",
-            progress   = progress_logs,
+            session_id=effective_session,
+            reply="⏱ 请求超时，Agent 可能正在执行耗时任务，请稍后重试。",
+            progress=progress_logs,
         )
     finally:
         mgr.unsubscribe_sse(effective_session, q)
@@ -200,7 +205,7 @@ async def stream(session_id: str, request: Request):
     连接断开时自动取消订阅。
     """
     mgr = get_manager()
-    q   = mgr.subscribe_sse(session_id)
+    q = mgr.subscribe_sse(session_id)
 
     async def event_generator() -> AsyncIterator[str]:
         try:
@@ -220,8 +225,8 @@ async def stream(session_id: str, request: Request):
         event_generator(),
         media_type="text/event-stream",
         headers={
-            "Cache-Control":               "no-cache",
-            "X-Accel-Buffering":           "no",
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
             "Access-Control-Allow-Origin": "*",
         },
     )

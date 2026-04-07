@@ -130,7 +130,7 @@ class AgentLoop:
 
     async def _handle_message(self, incoming: AgentMessage) -> None:
         """处理一条入站消息，执行 LLM 循环，生成回复。"""
-        log.info(f"[{self.session_id}({self.role})] ← [{incoming.from_session}] | {incoming.content[:120]}")
+        log.info(f"[{self.session_id}({self.role})] ← [{incoming.from_session}] | {incoming.content}")
 
         # 子 Agent 收到空任务直接快速失败，不进入 LLM 循环
         if self.role != "main" and not incoming.content.strip():
@@ -169,7 +169,7 @@ class AgentLoop:
 
         # 3. LLM 工具调用循环
         final_reply = await self._llm_loop(messages, incoming)
-        log.info(f"[{self.session_id}] LLM done | reply={final_reply[:80]}")
+        log.info(f"[{self.session_id}] LLM done | reply={final_reply}")
 
         # 4. 持久化最终回复（fire-and-forget，不阻塞回复推送）
         reply_msg = {"role": "assistant", "content": final_reply}
@@ -215,11 +215,30 @@ class AgentLoop:
             except Exception as e:
                 log.error(f"[{self.session_id}] LLM error: {e}")
                 return f"LLM 请求失败: {e}"
+            choices = getattr(response, "choices", None)
+            if not choices:
+                # 某些网关在鉴权失败/限流时会返回非标准结构，避免直接下标崩溃
+                raw = ""
+                try:
+                    raw = response.model_dump_json(exclude_none=True)
+                except Exception:
+                    raw = str(response)
+                log.error(f"[{self.session_id}] LLM empty choices, raw={raw}")
+                return "LLM 返回空响应（choices 为空），请检查网关鉴权、模型名和配额。"
 
-            msg        = response.choices[0].message
+            msg = getattr(choices[0], "message", None)
+            if msg is None:
+                raw = ""
+                try:
+                    raw = response.model_dump_json(exclude_none=True)
+                except Exception:
+                    raw = str(response)
+                log.error(f"[{self.session_id}] LLM missing message in first choice, raw={raw}")
+                return "LLM 返回异常响应（message 为空），请检查网关返回格式。"
+
             tool_calls = self._parse_tool_calls(msg)
 
-            log.info(f"[{self.session_id}] round={round_num} | text={repr((msg.content or '')[:80])} | tools={[tc.function.name for tc in tool_calls]}")
+            log.info(f"[{self.session_id}] round={round_num} | text={repr((msg.content or ''))} | tools={[tc.function.name for tc in tool_calls]}")
 
             # 无工具调用 → 返回最终文字
             if not tool_calls:
@@ -248,11 +267,11 @@ class AgentLoop:
                     fn_args = {}
 
                 fn_name = tc.function.name
-                log.info(f"[{self.session_id}] CALL {fn_name} | args={tc.function.arguments[:200]}")
+                log.info(f"[{self.session_id}] CALL {fn_name} | args={tc.function.arguments}")
 
                 # 推给前端：告知正在调用哪个工具
                 if self.announce_callback:
-                    preview = json.dumps(fn_args, ensure_ascii=False)[:80]
+                    preview = json.dumps(fn_args, ensure_ascii=False)
                     await self.announce_callback(
                         self.session_id,
                         f"🔧 {fn_name}({preview})",
@@ -274,14 +293,14 @@ class AgentLoop:
 
                 # 推给前端：工具执行结果摘要
                 if self.announce_callback:
-                    result_preview = (result or "")[:120].replace("\n", " ")
+                    result_preview = (result or "").replace("\n", " ")
                     await self.announce_callback(
                         self.session_id,
                         f"  ↳ {result_preview}",
                         is_progress=True, is_final=False,
                     )
 
-                log.info(f"[{self.session_id}] RESULT {fn_name} | {repr(result[:200])}")
+                log.info(f"[{self.session_id}] RESULT {fn_name} | {repr(result)}")
                 tool_msg = {"role": "tool", "tool_call_id": tc.id, "content": result}
                 messages.append(tool_msg)
                 asyncio.create_task(append_message(self.session_id, tool_msg))
@@ -304,7 +323,7 @@ class AgentLoop:
         if not to_session or not message:
             return "ERROR: to_session 和 message 不能为空"
 
-        log.info(f"[{self.session_id}] -> [{to_session}] task={repr(message[:300])}")
+        log.info(f"[{self.session_id}] -> [{to_session}] task={repr(message)}")
 
         flags = Flags.NONE
         if not announce:
@@ -319,13 +338,13 @@ class AgentLoop:
             reply_to     = self.session_id,
         )
 
-        log.info(f"[{self.session_id}] → [{to_session}]: {message[:80]}")
+        log.info(f"[{self.session_id}] → [{to_session}]: {message}")
 
         # 推给用户：告知正在调用子 Agent
         if self.announce_callback:
             await self.announce_callback(
                 self.session_id,
-                f"[调用 {to_session}] {message[:100]}",
+                f"[调用 {to_session}] {message}",
                 is_progress=True,
             )
 
@@ -335,7 +354,7 @@ class AgentLoop:
         if reply is None:
             return f"ERROR: [{to_session}] 未在超时时间内回复"
 
-        log.info(f"[{self.session_id}] ← [{to_session}]: {reply.content[:80]}")
+        log.info(f"[{self.session_id}] ← [{to_session}]: {reply.content}")
         return reply.content
 
     # ── 辅助 ──────────────────────────────────────────────────────
