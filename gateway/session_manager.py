@@ -18,16 +18,12 @@ from agent.loop import AgentLoop
 from messaging.bus import MessageBus, bus as global_bus
 from messaging.protocol import AgentMessage, Flags, MessageType
 from store.session_store import create_session, list_sessions, get_session
-from config import settings
 
 log = logging.getLogger(__name__)
 
 # 默认预启动的 session（平台初始化时自动创建）
 DEFAULT_SESSIONS = [
     ("main",      "main"),
-    ("planner",   "planner"),
-    ("knowledge", "knowledge"),
-    ("executor",  "executor"),
 ]
 
 
@@ -98,6 +94,7 @@ class SessionManager:
                 client            = self.client,
                 model             = self.model,
                 announce_callback = self._announce,
+                ensure_session_callback = self.ensure_session,
             )
             self._loops[session_id] = loop
 

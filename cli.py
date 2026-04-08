@@ -30,37 +30,40 @@ GATEWAY_URL = "http://localhost:8000"
 async def cmd_chat(message: str, session_id: str = "main") -> None:
     """发消息，通过 SSE 实时打印输出直到收到完整回复。"""
     async with httpx.AsyncClient(timeout=300) as client:
-        # 投递消息
-        resp = await client.post(
-            f"{GATEWAY_URL}/chat",
-            json={"message": message, "session_id": session_id},
-        )
-        resp.raise_for_status()
-        print(f"[queued → {session_id}]")
-
-        # 订阅 SSE
+        # 先订阅 SSE，避免非常快的回复在订阅前丢失
         async with client.stream("GET", f"{GATEWAY_URL}/stream/{session_id}") as stream:
+            # 投递消息
+            resp = await client.post(
+                f"{GATEWAY_URL}/chat",
+                json={"message": message, "session_id": session_id},
+            )
+            resp.raise_for_status()
+            print(f"[queued → {session_id}]")
+
             async for line in stream.aiter_lines():
                 if not line.startswith("data:"):
                     continue
                 raw = line[5:].strip()
                 if not raw or raw == "[DONE]":
-                    break
+                    # [DONE] 不是业务结束条件，继续等待 final=True
+                    continue
                 try:
                     payload = json.loads(raw)
                 except Exception:
                     continue
 
-                text     = payload.get("text", "")
+                text = payload.get("text", "")
                 progress = payload.get("progress", False)
+                final = payload.get("final", False)
 
                 if progress:
                     print(f"\033[90m{text}\033[0m", flush=True)  # 灰色显示进度
                 else:
-                    print(text, flush=True)
-                    # 收到非 progress 回复后短暂等待，判断是否结束
-                    await asyncio.sleep(0.5)
-                    # 检查 inbox 是否空了（简单启发：queue 为空时停止）
+                    if text:
+                        print(text, flush=True)
+
+                # 仅 final=True 才代表完整回复结束，避免长回复被截断
+                if final:
                     break
 
 

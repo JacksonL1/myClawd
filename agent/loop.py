@@ -35,6 +35,7 @@ from store.session_store import (
     load_history,
     set_session_status,
 )
+from store.workspace import write_workspace_file
 from store.session_store import list_sessions
 
 log = logging.getLogger(__name__)
@@ -67,6 +68,7 @@ class AgentLoop:
         client: AsyncOpenAI,
         model: str,
         announce_callback=None,
+        ensure_session_callback=None,
     ):
         self.session_id        = session_id
         self.role              = role
@@ -74,6 +76,7 @@ class AgentLoop:
         self.client            = client
         self.model             = model
         self.announce_callback = announce_callback
+        self.ensure_session_callback = ensure_session_callback
         self._inbox            = bus.register(session_id)
         self._stopped          = False
         self.ready             = asyncio.Event()  # task 进入主循环后 set
@@ -161,7 +164,6 @@ class AgentLoop:
                 {"role": "user", "content": incoming.content},
             ]
             try:
-                from store.workspace import write_workspace_file
                 await write_workspace_file(self.session_id, "ERRORS.md", "# Errors\n")
             except Exception:
                 pass
@@ -323,7 +325,15 @@ class AgentLoop:
         if not to_session or not message:
             return "ERROR: to_session 和 message 不能为空"
 
-        log.info(f"[{self.session_id}] -> [{to_session}] task={repr(message)}")
+        target_session, target_role = self._resolve_target_session(to_session)
+
+        if self.ensure_session_callback and target_role:
+            try:
+                await self.ensure_session_callback(target_session, target_role)
+            except Exception as e:
+                return f"ERROR: 无法创建子 Agent 会话 {target_session}: {e}"
+
+        log.info(f"[{self.session_id}] -> [{target_session}] task={repr(message)}")
 
         flags = Flags.NONE
         if not announce:
@@ -331,20 +341,20 @@ class AgentLoop:
 
         outgoing = AgentMessage(
             from_session = self.session_id,
-            to_session   = to_session,
+            to_session   = target_session,
             content      = message,
             type         = MessageType.TASK,
             flags        = flags,
             reply_to     = self.session_id,
         )
 
-        log.info(f"[{self.session_id}] → [{to_session}]: {message}")
+        log.info(f"[{self.session_id}] → [{target_session}]: {message}")
 
         # 推给用户：告知正在调用子 Agent
         if self.announce_callback:
             await self.announce_callback(
                 self.session_id,
-                f"[调用 {to_session}] {message}",
+                f"[调用 {target_session}] {message}",
                 is_progress=True,
             )
 
@@ -352,10 +362,34 @@ class AgentLoop:
         reply = await self.bus.send(outgoing, wait_reply=True, reply_timeout=120.0)
 
         if reply is None:
-            return f"ERROR: [{to_session}] 未在超时时间内回复"
+            return f"ERROR: [{target_session}] 未在超时时间内回复"
 
-        log.info(f"[{self.session_id}] ← [{to_session}]: {reply.content}")
+        log.info(f"[{self.session_id}] ← [{target_session}]: {reply.content}")
         return reply.content
+
+    def _resolve_target_session(self, requested: str) -> tuple[str, str | None]:
+        """
+        把逻辑角色名（planner/knowledge/executor）映射为当前会话命名空间内的子 session。
+        例如：userA 主会话调用 planner -> userA::planner。
+        """
+        role = requested.strip()
+        role_set = {"planner", "knowledge", "executor"}
+        if role in role_set:
+            root = self._session_root()
+            return f"{root}::{role}", role
+
+        # 已经是 namespaced 形式（如 userA::planner）时，自动识别角色
+        if "::" in role:
+            maybe_role = role.rsplit("::", 1)[-1].strip()
+            if maybe_role in role_set:
+                return role, maybe_role
+
+        return role, None
+
+    def _session_root(self) -> str:
+        if "::" in self.session_id:
+            return self.session_id.split("::", 1)[0]
+        return self.session_id
 
     # ── 辅助 ──────────────────────────────────────────────────────
 

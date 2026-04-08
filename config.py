@@ -38,6 +38,23 @@ class Settings(BaseSettings):
     # Agent
     max_tool_rounds: int = 15
 
+    # Bash 工具安全策略
+    # 逗号分隔的命令白名单，仅允许这些命令作为入口执行
+    bash_allowed_commands: str = (
+        "python,python3,pip,pip3,uv,pytest,"
+        "ls,pwd,cat,head,tail,sed,awk,rg,find,echo,"
+        "git,cp,mv,mkdir,touch"
+    )
+    # 逗号分隔的危险片段黑名单（命中即拒绝）
+    bash_blocked_patterns: str = (
+        "rm -rf,shutdown,reboot,poweroff,:(){,mkfs,dd if=,/etc/passwd,"
+        "chmod 777,> /dev/sda,curl | sh,wget | sh"
+    )
+    # 是否允许 shell 操作符（如 &&、|、>、; 等）。默认关闭。
+    bash_allow_shell_operators: bool = False
+    # bash 工具执行目录根（相对项目根）
+    bash_workspace_root: str = "."
+
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"
