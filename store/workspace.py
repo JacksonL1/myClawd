@@ -10,7 +10,12 @@ from datetime import datetime, timezone
 
 from store.db import get_db
 
-_VALID_FILES = {"TODO.md", "NOTES.md", "SUMMARY.md", "ERRORS.md"}
+_VALID_FILES = {
+    "TODO.md",
+    "NOTES.md",
+    "SUMMARY.md",
+    "ERRORS.md",
+}
 
 
 def _now() -> str:

@@ -8,8 +8,10 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import sys
 import re
+import shlex
 from pathlib import Path
 
 from store.workspace import (
@@ -20,6 +22,7 @@ from store.workspace import (
     has_failed_before,
 )
 from skills.loader import load_skill_content  # 保留原有 skill 加载
+from config import settings
 
 
 async def execute_tool(name: str, args: dict, session_id: str) -> str:
@@ -47,6 +50,18 @@ async def execute_tool(name: str, args: dict, session_id: str) -> str:
         if sys.platform == "win32":
             command = re.sub(r"\bpython3\b", "python", command)
 
+        check_error = _validate_bash_command(command)
+        if check_error:
+            return f"ERROR: {check_error}"
+
+        try:
+            cmd_parts = shlex.split(command, posix=(sys.platform != "win32"))
+        except ValueError as e:
+            return f"ERROR: 命令解析失败：{e}"
+
+        if not cmd_parts:
+            return "ERROR: 命令为空"
+
         # 检查是否曾经失败
         if await has_failed_before(session_id, command):
             return (
@@ -55,11 +70,12 @@ async def execute_tool(name: str, args: dict, session_id: str) -> str:
             )
 
         try:
-            proc = await asyncio.create_subprocess_shell(
-                command,
+            proc = await asyncio.create_subprocess_exec(
+                *cmd_parts,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
-                env={**__import__("os").environ, "PYTHONIOENCODING": "utf-8"},
+                cwd=str(Path(settings.bash_workspace_root).resolve()),
+                env={**os.environ, "PYTHONIOENCODING": "utf-8"},
             )
             try:
                 stdout, stderr = await asyncio.wait_for(
@@ -126,3 +142,42 @@ def _list_skill_files(skill_name: str) -> str:
         skill_dir = hits[0]
     files = sorted(f.resolve() for f in skill_dir.rglob("*") if f.is_file())
     return "完整路径列表：\n" + "\n".join(str(f) for f in files)
+
+
+def _validate_bash_command(command: str) -> str | None:
+    """命令层白名单与沙箱策略检查。返回错误文案或 None。"""
+    if not command:
+        return "命令为空"
+
+    normalized = command.lower()
+    blocked_patterns = [
+        p.strip().lower()
+        for p in settings.bash_blocked_patterns.split(",")
+        if p.strip()
+    ]
+    for p in blocked_patterns:
+        if p in normalized:
+            return f"命中危险命令黑名单：{p}"
+
+    if not settings.bash_allow_shell_operators:
+        if re.search(r"[;&|`]|\$\(|<|>", command):
+            return "不允许 shell 操作符（; & | ` $( ) < >）"
+
+    try:
+        parts = shlex.split(command, posix=(sys.platform != "win32"))
+    except ValueError as e:
+        return f"命令解析失败：{e}"
+
+    if not parts:
+        return "命令为空"
+
+    entry = Path(parts[0]).name.lower()
+    allowed = {
+        c.strip().lower()
+        for c in settings.bash_allowed_commands.split(",")
+        if c.strip()
+    }
+    if entry not in allowed:
+        return f"命令 '{entry}' 不在白名单中"
+
+    return None
