@@ -1,332 +1,224 @@
-# OpenClaw-PY / SuperChat
+# SuperChat
 
 一个基于 **FastAPI + Async OpenAI 协议 + 多 Agent 会话编排** 的智能对话系统。
 
-这个项目支持：
-- 面向用户的 HTTP / SSE 对话接口；
-- 基于 `session_id` 的会话隔离与持久化；
-- 主 Agent + 子 Agent（planner / knowledge / executor）协作；
-- Skill 目录自动发现、按需加载；
-- 飞书机器人（Lark）长连接接入。
+专为**本地开发**和**快速原型验证**设计，零配置启动，5 分钟跑通。
 
 ---
 
-## 1. 核心能力
+## 核心能力
 
-- **会话隔离与并发运行**：每个 session 对应一个独立 `AgentLoop` 任务，互不干扰。  
-- **流式输出**：通过 `GET /stream/{session_id}` 订阅 SSE，实时接收执行进度与最终答案。  
-- **同步接口**：`POST /chat/sync` 可直接等待最终回复，便于机器人类调用方使用。  
-- **多 Agent 协作**：主 Agent 负责调度，子 Agent 分工执行（规划、知识检索、命令执行）。  
-- **SQLite 持久化**：会话、消息历史、工作区文件（TODO/NOTES/ERRORS）和 agent 路由记录全部落库。  
-- **工具安全控制**：`bash` 工具采用命令白名单 + 参数级沙箱校验（参数数量/长度/路径越界检查）并限制 shell 操作符。  
-- **Skill 机制**：自动扫描 `skills/*/SKILL.md` 并注入模型上下文，支持读取 skill 详情和脚本路径。  
-- **飞书 Bot 集成**：使用飞书卡片展示“处理中进度 + 最终回复”，减少长任务超时问题。
-- **网关安全基线**：Gateway 支持 Bearer JWT/OAuth2 认证（可按环境开关）。
-- **输入风控过滤**：在 `/chat` 与 `/chat/sync` 增加外部输入恶意指令检测层。
-- **向量记忆支持**：支持对会话消息做 embedding 入库，并在对话时召回相似记忆。
-- **审计日志**：记录 Agent 决策、委派、工具调用与执行结果，便于事后追溯。
-- **Executor 沙箱隔离**：默认通过 Docker 沙箱执行命令，避免直接操作宿主机。
+- **零配置启动**：SQLite 内置，无需额外数据库，一键运行
+- **会话隔离**：每个 `session_id` 独立上下文，支持多会话并行
+- **流式输出**：SSE 实时推送，同步/异步接口双支持
+- **多 Agent 协作**：main/planner/knowledge/executor 自动分工
+- **Skill 扩展**：自动扫描 `skills/*/SKILL.md`，热加载技能
+- **飞书 Bot**：原生 Lark 卡片交互，群聊即问即答
 
 ---
 
-## 2. 系统架构（按代码实际实现）
+## 快速开始（3 分钟）
 
-```text
-用户/客户端
-   ├─ CLI (cli.py)
-   ├─ HTTP API 调用方
-   └─ 飞书机器人 (lark_bot/)
-          ↓
-    Gateway (gateway/main.py)
-          ↓
-  SessionManager (gateway/session_manager.py)
-          ↓
-    AgentLoop (agent/loop.py)
-          ↓
- tools/executor + skills/loader + MessageBus
-          ↓
-       SQLite (store/*.py)
-```
-
-### 角色分工
-
-- **main**：用户对话入口与任务编排。  
-- **planner**：把复杂任务拆成结构化步骤。  
-- **knowledge**：读取 skill / 文件 /工作区并提炼知识。  
-- **executor**：执行 bash 与落地操作，返回真实结果。
-
-> 其中 `main` 的工具权限被限制为“协调型工具”，执行类工具需委派给子 Agent，避免主循环混杂执行细节。
-
----
-
-## 3. 目录结构
-
-```text
-.
-├── cli.py                    # 命令行入口（chat/sessions/history/reset/serve）
-├── config.py                 # 主服务配置（SGLang/Skills/SQLite/Bash 策略）
-├── agent/
-│   ├── loop.py               # Agent 主循环与 LLM 工具调用循环
-│   ├── executor.py           # 工具执行入口（bash/read_file/workspace）
-│   ├── prompts.py            # 各角色 system prompt
-│   └── tools.py              # 工具 JSON Schema
-├── gateway/
-│   ├── main.py               # FastAPI 路由（/chat /chat/sync /stream ...）
-│   └── session_manager.py    # session 生命周期与 SSE 广播管理
-├── messaging/
-│   ├── bus.py                # Agent 间消息总线
-│   └── protocol.py           # 消息协议/标志位定义
-├── store/
-│   ├── db.py                 # SQLite 初始化、连接上下文、建表
-│   ├── session_store.py      # 会话与消息历史持久化
-│   └── workspace.py          # TODO/NOTES/SUMMARY/ERRORS 虚拟工作区
-├── skills/
-│   ├── loader.py             # 扫描和加载 SKILL.md
-│   ├── memory.py             # Skill 成功命令记忆
-│   └── */SKILL.md            # 各技能文档与 scripts
-└── lark_bot/
-    ├── bot.py                # 飞书事件处理 + 卡片更新
-    ├── superchat_client.py   # 对 Gateway 的 SSE 调用封装
-    └── config.py             # 飞书侧配置
-```
-
----
-
-## 4. 环境要求
-
-- Python **3.10+**（建议 3.11）
-- 可访问的 OpenAI 兼容接口（SGLang / 网关等）
-- SQLite（Python 内置驱动即可）
-
-安装依赖：
+### 1. 安装依赖
 
 ```bash
+git clone https://github.com/JacksonL1/superChat.git
+cd superChat
 pip install -r requirements.txt
 ```
 
-> 若仅运行飞书 Bot，需额外安装 `lark_bot/requirements.txt`。
+### 2. 配置（极简）
 
----
+创建 `.env` 文件，只需填 LLM 接口：
 
-## 5. 配置说明
+```bash
+# 必须的：OpenAI 兼容接口
+SGLANG_BASE_URL=https://api.openai.com/v1
+SGLANG_API_KEY=sk-your-key
+SGLANG_MODEL=gpt-4o-mini
 
-项目使用 `pydantic-settings`，默认读取根目录 `.env`。
-
-### 5.1 主服务配置（`config.py`）
-
-```env
-# ===== LLM 网关 =====
-SGLANG_BASE_URL=http://localhost:8000/v1
-SGLANG_MODEL=Qwen
-SGLANG_API_KEY=
-MODELSCOPE_API_TOKEN=
-SGLANG_HEADERS={"Content-Type":"application/json"}
-
-# ===== Gateway 认证（JWT/OAuth2 Bearer） =====
-AUTH_ENABLED=true
-AUTH_JWT_SECRET=change_me
-AUTH_JWT_ALGORITHM=HS256
-AUTH_ISSUER=
-AUTH_AUDIENCE=
-AUTH_REQUIRED_SCOPES=gateway:chat
-AUTH_CLOCK_SKEW_SECONDS=30
-
-# ===== 向量记忆 =====
-EMBEDDING_ENABLED=true
-EMBEDDING_MODEL=text-embedding-3-small
-EMBEDDING_SIMILARITY_THRESHOLD=0.75
-EMBEDDING_MAX_MEMORIES=5
-EMBEDDING_MAX_CHARS=2000
-
-# ===== Skills =====
-SKILLS_DIR=./skills
-
-# ===== SQLite =====
-DB_PATH=./data/openclaw.db
-
-# ===== Agent =====
-MAX_TOOL_ROUNDS=15
-
-# ===== Bash 工具策略 =====
-BASH_ALLOWED_COMMANDS=python,python3,pip,pip3,uv,pytest,ls,pwd,cat,head,tail,sed,awk,rg,find,echo,git,cp,mv,mkdir,touch
-BASH_BLOCKED_PATTERNS=rm -rf,shutdown,reboot,poweroff,:(){,mkfs,dd if=,/etc/passwd,chmod 777,> /dev/sda,curl | sh,wget | sh
-BASH_ALLOW_SHELL_OPERATORS=false
-BASH_MAX_ARGS=24
-BASH_MAX_ARG_LENGTH=256
-BASH_WORKSPACE_ROOT=.
-
-# ===== Executor 沙箱 =====
-EXECUTOR_SANDBOX_MODE=docker
-EXECUTOR_SANDBOX_IMAGE=python:3.11-alpine
-EXECUTOR_SANDBOX_NETWORK=none
-EXECUTOR_SANDBOX_WORKDIR=/workspace
+# 可选的：想换本地模型？
+# SGLANG_BASE_URL=http://localhost:8000/v1
+# SGLANG_MODEL=Qwen2.5-7B
 ```
 
-### 5.2 飞书 Bot 配置（`lark_bot/config.py`）
+> **开发提示**：没有 API Key？用 [Ollama](https://ollama.com/) 本地跑模型，改 `SGLANG_BASE_URL=http://localhost:11434/v1` 即可。
 
-```env
-LARK_APP_ID=
-LARK_APP_SECRET=
-SUPERCHAT_URL=http://localhost:8000
-GROUP_AT_ONLY=true
-REQUEST_TIMEOUT=50000
+### 3. 启动服务
+
+```bash
+python cli.py serve
+```
+
+看到 `Uvicorn running on http://0.0.0.0:8000` 即成功。
+
+### 4. 测试对话
+
+```bash
+# 方式 1：CLI（推荐开发调试）
+python cli.py chat "你好，请介绍自己"
+
+# 方式 2：curl
+curl -X POST http://localhost:8000/chat/sync \
+  -H "Content-Type: application/json" \
+  -d '{"session_id":"demo","message":"你好"}'
+
+# 方式 3：SSE 流式（开两个终端）
+# 终端 A：监听流
+curl -N http://localhost:8000/stream/demo
+
+# 终端 B：发送消息
+curl -X POST http://localhost:8000/chat \
+  -H "Content-Type: application/json" \
+  -d '{"session_id":"demo","message":"讲个笑话"}'
 ```
 
 ---
 
-## 6. 启动方式
+## 开发指南
 
-### 6.1 启动 Gateway
+### 目录结构
 
-```bash
-python cli.py serve --host 0.0.0.0 --port 8000
+```
+.
+├── cli.py                 # 命令行入口
+├── config.py              # 配置（pydantic-settings，.env 自动加载）
+├── agent/
+│   ├── loop.py            # Agent 主循环
+│   ├── executor.py        # 工具执行（bash/文件/工作区）
+│   ├── prompts.py         # 各角色 system prompt
+│   └── tools.py           # 工具定义
+├── gateway/
+│   ├── main.py            # FastAPI 路由
+│   └── session_manager.py # 会话生命周期管理
+├── store/
+│   ├── db.py              # SQLite 连接
+│   ├── session_store.py   # 消息历史持久化
+│   └── workspace.py       # TODO/NOTES/SUMMARY/ERRORS 虚拟工作区
+├── skills/
+│   ├── loader.py          # Skill 扫描加载
+│   └── */SKILL.md         # 技能定义
+└── lark_bot/              # 飞书机器人（可选）
 ```
 
-### 6.2 CLI 调试
+### 添加新工具
 
-```bash
-# 发送消息（默认 session=main）
-python cli.py chat "你好"
+1. **定义 Schema**（`agent/tools.py`）：
 
-# 指定会话
-python cli.py chat "帮我总结这个项目" --session demo
-
-# 查看会话列表
-python cli.py sessions
-
-# 查看历史
-python cli.py history demo
-
-# 清空历史
-python cli.py reset demo
+```python
+{
+    "type": "function",
+    "function": {
+        "name": "my_tool",
+        "description": "工具描述",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "arg1": {"type": "string", "description": "参数1"}
+            },
+            "required": ["arg1"]
+        }
+    }
+}
 ```
 
-### 6.3 启动飞书 Bot
+2. **实现逻辑**（`agent/executor.py`）：
+
+```python
+async def execute_my_tool(arg1: str) -> str:
+    # 你的逻辑
+    return f"Result: {arg1}"
+```
+
+3. **注册到 Agent**（`agent/loop.py` 工具白名单）：
+
+```python
+executor_tools = ["bash", "read_file", "my_tool"]  # 加上新工具
+```
+
+### 开发模式配置（`.env`）
+
+```bash
+# 开发优化：关闭安全层，提升便利性
+BASH_ALLOW_SHELL_OPERATORS=true      # 允许管道、重定向等
+BASH_ALLOWED_COMMANDS=               # 空=不限制命令（谨慎！）
+MAX_TOOL_ROUNDS=30                   # 更多轮次，方便调试
+
+# 日志
+LOG_LEVEL=DEBUG
+
+# 关闭飞书（如不需要）
+# LARK_APP_ID=  # 留空不启用
+```
+
+---
+
+## API 速查
+
+| 接口 | 方法 | 说明 |
+|------|------|------|
+| `/health` | GET | 健康检查 |
+| `/chat` | POST | 异步对话（配合 SSE） |
+| `/chat/sync` | POST | 同步对话（阻塞等结果） |
+| `/stream/{session_id}` | GET | SSE 流式订阅 |
+| `/sessions` | GET | 列出所有会话 |
+| `/sessions/{id}/history` | GET | 查看会话历史 |
+| `/sessions/{id}/reset` | POST | 清空会话 |
+
+---
+
+## 飞书机器人（可选）
 
 ```bash
 cd lark_bot
+pip install -r requirements.txt
+
+# 配置
+export LARK_APP_ID=cli_xxx
+export LARK_APP_SECRET=xxx
+export SUPERCHAT_URL=http://localhost:8000
+
 python bot.py
 ```
 
-
-### 6.4 一键安全验收脚本
-
-```bash
-AUTH_JWT_SECRET=CHANGE_ME_IN_PROD ./scripts/verify_security_stack.sh
-```
-
-脚本会按顺序验证：输入风控、审计日志写入、向量记忆写入、Executor 沙箱执行；并自动识别网关是否启用鉴权：
-
-- 若 `/health` 返回 `401`：按鉴权模式继续（自动签发测试 token 并校验 bearer 访问）。
-- 若 `/health` 返回 `200`：按无鉴权模式继续（给出 warning，但不失败）。
-
-常用参数：
-
-```bash
-BASE_URL=http://localhost:8000 \
-DB_PATH=./data/openclaw.db \
-SESSION_ID=verify-main \
-EMBEDDING_SESSION_ID=verify-memory \
-AUTH_JWT_SECRET=CHANGE_ME_IN_PROD \
-./scripts/verify_security_stack.sh
-```
+群聊中 @机器人即可对话。
 
 ---
 
-## 7. API 一览
+## 与 OpenClaw 的关系
 
-### 健康检查
+本项目是 **OpenClaw 的简化学习版**，做了以下**开发友好**的调整：
 
-```bash
-curl http://localhost:8000/health
-```
+| 特性 | superChat（本分支） | OpenClaw |
+|------|---------------------|----------|
+| 部署复杂度 | 单容器，SQLite 零依赖 | 多服务，需向量库/外部存储 |
+| 认证 | 可选关闭，开发零摩擦 | 强制 OAuth2/JWT |
+| 沙箱 | 本机执行（便于调试文件） | 强制 Docker 沙箱 |
+| 向量记忆 | 可选关闭 | 默认启用 |
+| 审计日志 | 简单记录 | 完整追踪 |
 
-### 异步对话（推荐配合 SSE）
-
-```bash
-curl -X POST http://localhost:8000/chat \
-  -H "Content-Type: application/json" \
-  -d '{"session_id":"main","message":"你好"}'
-```
-
-### 同步对话（阻塞直到最终回复）
-
-```bash
-curl -X POST http://localhost:8000/chat/sync \
-  -H "Content-Type: application/json" \
-  -d '{"session_id":"main","message":"你好","timeout":120}'
-```
-
-### 订阅 SSE
-
-```bash
-curl -N http://localhost:8000/stream/main
-```
-
-### 会话与历史
-
-```bash
-curl http://localhost:8000/sessions
-curl http://localhost:8000/sessions/main/history
-curl -X POST http://localhost:8000/sessions/main/reset
-```
+**适用场景**：
+- ✅ 本分支：本地开发、快速原型、内部工具
+- ✅ OpenClaw：生产环境、多租户 SaaS、高安全要求
 
 ---
 
-## 8. 数据持久化设计
+**未来计划**
 
-SQLite 主要表：
-- `sessions`：会话元信息与状态；
-- `messages`：完整对话消息（含 tool_calls）；
-- `workspace`：每个 session 的 TODO / NOTES / SUMMARY / ERRORS；
-- `agent_messages`：Agent 间消息审计记录；
-- `skill_memory`：Skill 成功命令记忆。
-- `vector_memories`：向量嵌入记忆与相似召回。
-- `audit_logs`：Agent 决策/执行审计日志。
+- 完善Memory机制
+- 内部每一个Agent可以指定模型
 
-`store/session_store.py` 使用 **每 session 单写连接 + 队列串行写入**，显著降低并发场景下 SQLite 锁冲突。
-
----
-
-## 9. Skills 开发与接入
-
-每个 skill 建议结构：
-
-```text
-skills/my-skill/
-├── SKILL.md
-└── scripts/
-    └── run.py
-```
-
-说明：
-1. `SKILL.md` 作为技能说明入口；
-2. `skills/loader.py` 会自动扫描并把技能元信息注入上下文；
-3. Agent 可通过 `load_skill`、`list_skill_files`、`read_file` 使用技能内容；
-4. `skills/memory.py` 会记录成功命令，供后续同类任务复用。
-
----
-
-## 10. 常见问题排查
-
-- **Gateway 启动即报模型请求错误**：检查 `SGLANG_BASE_URL`、模型名与网关鉴权。  
-- **没有实时输出**：确认先建立 SSE 订阅，再发送 `/chat`。  
-- **bash 命令被拒绝**：检查是否命中白名单限制或黑名单片段。  
-- **SQLite database is locked**：确认是否使用本项目提供的写入路径，避免外部并发直写。  
-- **飞书群里机器人无响应**：检查 `GROUP_AT_ONLY=true` 时是否正确 @ 机器人。
-- **接口返回 401/403**：确认是否携带 Bearer JWT、issuer/audience 与 scope 满足网关校验。
-- **消息被风控拦截**：检查输入是否包含高风险注入或危险命令模式。
-
----
-
-## 11. 开发建议
-
-- 新增工具时：同步更新 `agent/tools.py`（schema）与 `agent/executor.py`（实现）。
-- 新增 Agent 角色时：同步更新 `agent/prompts.py` 与 `agent/loop.py` 的工具白名单。
-- 优先通过 `gateway/session_manager.py` 管理 session 生命周期，避免绕过管理器直接实例化 loop。
-
----
-
-## 12. License
+## License
 
 MIT
+
+这个版本的特点：
+
+| 方面 | 优化 |
+|------|------|
+| **启动速度** | 强调 3 分钟/5 分钟启动，降低心理门槛 |
+| **配置简化** | 只保留最必要的 LLM 配置，其他都有默认值 |
+| **安全降级** | 明确说明「开发友好」定位，bash 限制放宽 |
+| **开发工作流** | 添加工具、调试、热加载的具体步骤 |
+| **与 OpenClaw 对比** | 诚实说明取舍，避免用户困惑 |
+| **生产提示** | 保留安全升级路径，不误导用户 |
