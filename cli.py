@@ -87,7 +87,7 @@ async def cmd_history(session_id: str = "main") -> None:
         print(f"=== {session_id} history ({len(msgs)} messages) ===")
         for m in msgs:
             role    = m.get("role", "?")
-            content = (m.get("content") or "")[:200]
+            content = (m.get("content") or "")
             print(f"\n[{role.upper()}] {content}")
 
 
