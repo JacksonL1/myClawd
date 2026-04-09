@@ -205,8 +205,10 @@ python bot.py
 
 **未来计划**
 
-- 完善Memory机制
-- 内部每一个Agent可以指定模型
+- 分层记忆 + 选择性 Embedding
+- 本地 Embedding 方案（零 API 成本）
+- Agent 级模型路由设计
+- 安全加固 Checklist：网关认证、输入风控、沙箱隔离、审计与合规
 
 ## License
 
