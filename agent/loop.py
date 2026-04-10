@@ -211,6 +211,8 @@ class AgentLoop:
         标准的 LLM → tool_call → 执行 → 追加结果 → 继续 循环。
         遇到 sessions_send 工具调用时，通过 MessageBus 真正发消息给其他 Agent。
         """
+        repeated_tool_call_count = 0
+        last_tool_signature: str | None = None
         for round_num in range(_MAX_TOOL_ROUNDS):
 
             kwargs = dict(
@@ -257,6 +259,29 @@ class AgentLoop:
             # 无工具调用 → 返回最终文字
             if not tool_calls:
                 return self._clean(msg.content or "")
+
+            # 防御：若模型连续重复同一个工具调用（常见于“执行成功但无输出”的场景），
+            # 直接中断循环，避免进入死循环占满请求。
+            tool_signatures = [
+                f"{tc.function.name}:{tc.function.arguments}"
+                for tc in tool_calls
+            ]
+            round_signature = "||".join(tool_signatures)
+            if round_signature == last_tool_signature:
+                repeated_tool_call_count += 1
+            else:
+                repeated_tool_call_count = 0
+                last_tool_signature = round_signature
+
+            if repeated_tool_call_count >= 3:
+                log.warning(
+                    f"[{self.session_id}] 检测到重复工具调用死循环，已中断 | "
+                    f"round={round_num} signature={round_signature}"
+                )
+                return (
+                    "检测到模型连续重复调用同一工具且无新进展，已自动中断以避免死循环。"
+                    "请改为总结当前状态，或尝试不同命令。"
+                )
 
             # 追加 assistant 消息
             assistant_msg = {
