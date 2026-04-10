@@ -280,10 +280,24 @@ class AgentLoop:
         if origin_session != root_session and origin_task_message:
             try:
                 flags = Flags.ANNOUNCE_SKIP
+                resume_message = (
+                    "继续刚才被白名单授权打断的任务。\n\n"
+                    "原任务如下：\n"
+                    f"{origin_task_message}\n\n"
+                    "已执行并授权的命令：\n"
+                    f"- 入口命令：{entry}\n"
+                    f"- 完整命令：{command}\n\n"
+                    "该命令的执行结果如下：\n"
+                    f"{result}\n\n"
+                    "继续要求：\n"
+                    "- 不要重复执行上面这条命令。\n"
+                    "- 如果该命令已经失败，请读取 ERRORS.md，并改用其他方法继续任务。\n"
+                    "- 只基于当前结果继续后续步骤。"
+                )
                 outgoing = AgentMessage(
                     from_session=root_session,
                     to_session=origin_session,
-                    content=origin_task_message,
+                    content=resume_message,
                     type=MessageType.TASK,
                     flags=flags,
                     reply_to=root_session,
