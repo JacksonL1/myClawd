@@ -35,6 +35,7 @@ from store.session_store import (
     load_history,
     set_session_status,
 )
+from store.session_store import get_session_meta, patch_session_meta
 from store.workspace import write_workspace_file
 from store.session_store import list_sessions
 from store.audit import log_audit_event
@@ -139,6 +140,21 @@ class AgentLoop:
 
         await log_audit_event(self.session_id, "message_received", incoming.content, meta={"from": incoming.from_session, "role": self.role})
 
+        # ── bash 白名单问询：若存在待审批命令，优先处理用户回复 ─────────
+        if self.role == "main":
+            direct = await self._maybe_handle_bash_approval(incoming)
+            if direct is not None:
+                # 直接回复，不进入 LLM 循环
+                if incoming.should_reply():
+                    reply = incoming.make_reply(direct)
+                    await self.bus.deliver_reply(reply)
+                if self.announce_callback:
+                    await self.announce_callback(
+                        self.session_id, direct,
+                        is_progress=False, is_final=True,
+                    )
+                return
+
         # 子 Agent 收到空任务直接快速失败，不进入 LLM 循环
         if self.role != "main" and not incoming.content.strip():
             log.warning(f"[{self.session_id}] 收到空任务，跳过")
@@ -203,6 +219,70 @@ class AgentLoop:
                 is_progress=False, is_final=True,
             )
             log.info(f"[{self.session_id}] announce done")
+
+    async def _maybe_handle_bash_approval(self, incoming: AgentMessage) -> str | None:
+        """
+        若 session.meta 存在 pending_bash_approval，则把用户输入解析为：
+        - 仅本次允许 / 永久允许 / 拒绝
+        并在允许时自动继续执行之前被拦截的命令。
+        返回要直接回复用户的文本；若不处理则返回 None。
+        """
+        meta = await get_session_meta(self.session_id)
+        pending = meta.get("pending_bash_approval")
+        if not isinstance(pending, dict):
+            return None
+
+        entry = str(pending.get("entry") or "").strip().lower()
+        command = str(pending.get("command") or "").strip()
+        timeout = int(pending.get("timeout") or 60)
+        if not entry or not command:
+            await patch_session_meta(self.session_id, {"pending_bash_approval": None})
+            return None
+
+        text = (incoming.content or "").strip().lower()
+        if not text:
+            return None
+
+        allow_once = text in {"1", "y", "yes", "是", "好", "允许", "同意", "本次", "仅本次", "仅本次使用", "一次", "这次"}
+        allow_forever = text in {"2", "forever", "always", "永久", "永久允许", "一直", "总是", "加入白名单", "永久使用"}
+        deny = text in {"0", "n", "no", "否", "不", "拒绝", "取消", "不允许"}
+
+        if not (allow_once or allow_forever or deny):
+            return (
+                "检测到上一条命令需要白名单授权。\n"
+                f"- 命令入口：`{entry}`\n"
+                f"- 完整命令：`{command}`\n\n"
+                "请回复：\n"
+                "- `1`：仅本次允许\n"
+                "- `2`：永久允许（写入动态白名单）\n"
+                "- `0`：拒绝执行"
+            )
+
+        await patch_session_meta(self.session_id, {"pending_bash_approval": None})
+        if deny:
+            await log_audit_event(self.session_id, "bash_approval", f"deny: {command}", status="rejected", meta={"entry": entry})
+            return "已取消执行该命令。"
+
+        # 允许：更新临时白名单；永久允许则写入动态白名单文件
+        from agent.executor import temp_allowlist_add, add_dynamic_allowlist_entry
+
+        temp_allowlist_add(self.session_id, entry)
+        if allow_forever:
+            add_dynamic_allowlist_entry(entry)
+
+        await log_audit_event(
+            self.session_id,
+            "bash_approval",
+            f"allow({'forever' if allow_forever else 'once'}): {command}",
+            meta={"entry": entry},
+        )
+
+        # 自动继续执行此前被拦截的命令（用户已明确授权）
+        result = await execute_tool("bash", {"command": command, "timeout": timeout}, self.session_id)
+        return (
+            f"已{'永久' if allow_forever else '仅本次'}允许 `{entry}`，现在继续执行：`{command}`\n\n"
+            f"{result}"
+        )
 
     # ── LLM 工具调用循环 ──────────────────────────────────────────
 
@@ -305,6 +385,30 @@ class AgentLoop:
                 # ── 普通工具 ─────────────────────────────────────
                 else:
                     result = await execute_tool(fn_name, fn_args, self.session_id)
+
+                # ── bash 白名单问询：中断工具循环，转为用户交互 ─────────
+                if isinstance(result, str) and result.startswith("ERROR: NEED_BASH_APPROVAL:"):
+                    m = re.search(r"entry=([a-z0-9._-]+)\s+command=(.*)$", result, flags=re.I)
+                    if m:
+                        entry = m.group(1).strip().lower()
+                        cmd = m.group(2).strip()
+                        await patch_session_meta(self.session_id, {
+                            "pending_bash_approval": {
+                                "entry": entry,
+                                "command": cmd,
+                                "timeout": int(fn_args.get("timeout", 60)),
+                            }
+                        })
+                        await log_audit_event(self.session_id, "bash_approval_needed", cmd, status="blocked", meta={"entry": entry})
+                        return (
+                            "检测到命令不在白名单中，需要你授权后才能执行。\n"
+                            f"- 命令入口：`{entry}`\n"
+                            f"- 完整命令：`{cmd}`\n\n"
+                            "请回复：\n"
+                            "- `1`：仅本次允许\n"
+                            "- `2`：永久允许（写入动态白名单）\n"
+                            "- `0`：拒绝执行"
+                        )
 
                 # 推给前端：工具执行结果摘要
                 if self.announce_callback:
