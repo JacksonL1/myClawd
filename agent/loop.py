@@ -237,6 +237,7 @@ class AgentLoop:
         command = str(pending.get("command") or "").strip()
         timeout = int(pending.get("timeout") or 60)
         origin_session = str(pending.get("origin_session") or root_session).strip() or root_session
+        origin_task_message = str(pending.get("origin_task_message") or "").strip()
         if not entry or not command:
             await patch_session_meta(root_session, {"pending_bash_approval": None})
             return None
@@ -273,10 +274,28 @@ class AgentLoop:
 
         # 自动继续执行此前被拦截的命令（用户已明确授权）
         result = await execute_tool("bash", {"command": command, "timeout": timeout}, origin_session)
-        return (
-            f"已{'永久' if allow_forever else '仅本次'}允许 `{entry}`，现在继续执行：`{command}`\n\n"
-            f"{result}"
-        )
+        header = f"已{'永久' if allow_forever else '仅本次'}允许 `{entry}`，现在继续执行：`{command}`\n\n{result}"
+
+        # 授权后自动“继续原任务”：若拦截发生在子会话（如 main::executor），就把原任务重新投递一次
+        if origin_session != root_session and origin_task_message:
+            try:
+                flags = Flags.ANNOUNCE_SKIP
+                outgoing = AgentMessage(
+                    from_session=root_session,
+                    to_session=origin_session,
+                    content=origin_task_message,
+                    type=MessageType.TASK,
+                    flags=flags,
+                    reply_to=root_session,
+                )
+                reply = await self.bus.send(outgoing, wait_reply=True, reply_timeout=120.0)
+                if reply is None:
+                    return header + "\n\n（已尝试继续原任务，但子会话超时未回复）"
+                return header + "\n\n继续原任务结果：\n" + (reply.content or "")
+            except Exception as e:
+                return header + f"\n\n（继续原任务失败：{e}）"
+
+        return header
 
     def _bash_approval_prompt(self, entry: str, command: str, title: str = "检测到命令不在白名单中，需要你授权后才能执行。") -> str:
         return (
@@ -404,6 +423,8 @@ class AgentLoop:
                                 "command": cmd,
                                 "timeout": int(fn_args.get("timeout", 60)),
                                 "origin_session": self.session_id,
+                                # 用于授权后“继续原任务”
+                                "origin_task_message": incoming.content,
                             }
                         })
                         await log_audit_event(self.session_id, "bash_approval_needed", cmd, status="blocked", meta={"entry": entry})
