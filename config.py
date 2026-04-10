@@ -62,7 +62,7 @@ class Settings(BaseSettings):
     bash_allowed_commands: str = (
         "python,python3,pip,pip3,uv,pytest,"
         "ls,pwd,cat,head,tail,sed,awk,rg,find,echo,"
-        "git,cp,mv,mkdir,touch, curl, wget"
+        "git,cp,mv,mkdir,touch, curl, wget, date, printf"
     )
     # 逗号分隔的危险片段黑名单（命中即拒绝）
     bash_blocked_patterns: str = (

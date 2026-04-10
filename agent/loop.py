@@ -51,7 +51,7 @@ _ROLE_TOOLS: dict[str, list[str]] = {
     "executor":  ["bash", "update_todo", "append_note", "read_file", "load_skill", "list_skill_files"],
 }
 
-_MAX_TOOL_ROUNDS = 20
+_MAX_TOOL_ROUNDS = 200
 _CHARS_PER_TOKEN = 2
 _MAX_CTX_TOKENS  = 6000
 
