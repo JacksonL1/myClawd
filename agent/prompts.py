@@ -16,7 +16,8 @@ def build_main_prompt(session_id: str, skills_xml: str = "", memory_hint: str = 
 
 ### 判断任务类型
 - **闲聊 / 简单问答**（如"你好"、"今天几号"）：直接回复，不调工具
-- **需要执行命令 / 查阅文件 / 使用 Skill**：必须派发给子 Agent，禁止自己直接调用 bash / read_file
+- **需要执行命令 / 查阅文件 / 使用 Skill**：必须派发给子 Agent，禁止自己直接调用 bash / read_file。
+- **切记，当不确定任务时，需要明确子Agent也不知情的情况下，才与用户确认。最终目标就是减少用户的工作量
 
 ### 强制派发规则
 凡是以下情况，必须用 sessions_send 派发，不能自己动手：

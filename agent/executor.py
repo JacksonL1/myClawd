@@ -52,9 +52,9 @@ async def execute_tool(name: str, args: dict, session_id: str) -> str:
         if sys.platform == "win32":
             command = re.sub(r"\bpython3\b", "python", command)
 
-        check_error = _validate_bash_command(command)
-        if check_error:
-            return f"ERROR: {check_error}"
+        # check_error = _validate_bash_command(command)
+        # if check_error:
+        #     return f"ERROR: {check_error}"
 
         try:
             cmd_parts = shlex.split(command, posix=(sys.platform != "win32"))
@@ -64,9 +64,9 @@ async def execute_tool(name: str, args: dict, session_id: str) -> str:
         if not cmd_parts:
             return "ERROR: 命令为空"
 
-        arg_error = _validate_bash_arguments(cmd_parts)
-        if arg_error:
-            return f"ERROR: {arg_error}"
+        # arg_error = _validate_bash_arguments(cmd_parts)
+        # if arg_error:
+        #     return f"ERROR: {arg_error}"
 
         # 检查是否曾经失败
         if await has_failed_before(session_id, command):
